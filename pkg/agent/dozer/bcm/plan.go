@@ -3449,6 +3449,32 @@ func planExternalPeerings(agent *agentapi.Agent, spec *dozer.Spec) error {
 			}
 		}
 
+		extraPrefixes, err := peering.Permit.VPC.ResolveHostBGPExtraPrefixes(vpc)
+		if err != nil {
+			return errors.Wrapf(err, "failed to resolve hostBGP exports for external peering %s", name)
+		}
+		if len(extraPrefixes) > 0 && attachedVPCs[vpcName] && agent.Spec.Config.LoopbackWorkaround {
+			return errors.Errorf("hostBGP extra prefix export in peering %s requires native inter-VRF route leaking", name)
+		}
+		for prefix, bounds := range extraPrefixes {
+			cidr, err := iputil.ParseCIDR(prefix)
+			if err != nil {
+				return errors.Wrapf(err, "failed to parse hostBGP export prefix %s", prefix)
+			}
+			idx := agent.Spec.Catalog.SubnetIDs[prefix]
+			if idx < 100 || idx >= 65000 {
+				return errors.Errorf("invalid hostBGP export prefix id for prefix %s in peering %s", prefix, name)
+			}
+			spec.PrefixLists[extImportPrefixListName(externalName)].Prefixes[idx] = &dozer.SpecPrefixListEntry{
+				Prefix: dozer.SpecPrefixListPrefix{
+					Prefix: prefix,
+					Ge:     prefixListGe(cidr.Subnet, bounds.MinPrefixLen),
+					Le:     bounds.MaxPrefixLen,
+				},
+				Action: dozer.SpecPrefixListActionPermit,
+			}
+		}
+
 		extPrefixesName := vpcExtPrefixesPrefixListName(vpcName)
 		if _, exists := spec.PrefixLists[extPrefixesName]; !exists {
 			spec.PrefixLists[extPrefixesName] = &dozer.SpecPrefixList{

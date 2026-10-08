@@ -16,6 +16,7 @@ package v1beta1
 
 import (
 	"context"
+	"net/netip"
 	"sort"
 
 	"github.com/pkg/errors"
@@ -51,6 +52,38 @@ type ExternalPeeringSpecVPC struct {
 	Name string `json:"name,omitempty"`
 	// Subnets is the list of subnets to advertise from VPC to the External
 	Subnets []string `json:"subnets,omitempty"`
+	// HostBGPExtraPrefixes selects additional hostBGP prefixes configured on this VPC to advertise to the External.
+	// Selection is independent of Subnets and preserves the configured hostBGP prefix-length bounds.
+	// Omitted prefixes are not exported. Requires native inter-VRF route leaking (no loopback workaround).
+	// +kubebuilder:validation:MaxItems=100
+	// +listType=set
+	HostBGPExtraPrefixes []string `json:"hostBGPExtraPrefixes,omitempty"`
+}
+
+// ResolveHostBGPExtraPrefixes resolves explicit export selections to their effective hostBGP prefix-length bounds.
+func (permit ExternalPeeringSpecVPC) ResolveHostBGPExtraPrefixes(vpc VPCSpec) (map[string]VPCSubnetHostBGPPrefix, error) {
+	resolved := map[string]VPCSubnetHostBGPPrefix{}
+	for _, prefix := range permit.HostBGPExtraPrefixes {
+		found := false
+		for _, subnet := range vpc.Subnets {
+			if subnet == nil || !subnet.HostBGP {
+				continue
+			}
+			cfg, exists := subnet.HostBGPExtraPrefixes[prefix]
+			if !exists {
+				continue
+			}
+			minLen, maxLen := subnet.HostBGPExtraPrefixLens(cfg)
+			resolved[prefix] = VPCSubnetHostBGPPrefix{MinPrefixLen: minLen, MaxPrefixLen: maxLen}
+			found = true
+			break
+		}
+		if !found {
+			return nil, errors.Errorf("vpc %s does not have hostBGP extra prefix %s", permit.Name, prefix)
+		}
+	}
+
+	return resolved, nil
 }
 
 // ExternalPeeringSpecExternal defines the External-side of the configuration to peer with
@@ -141,6 +174,7 @@ func (peering *ExternalPeering) Default() {
 	peering.Labels[LabelExternal] = peering.Spec.Permit.External.Name
 
 	sort.Strings(peering.Spec.Permit.VPC.Subnets)
+	sort.Strings(peering.Spec.Permit.VPC.HostBGPExtraPrefixes)
 	sort.Slice(peering.Spec.Permit.External.Prefixes, func(i, j int) bool {
 		return peering.Spec.Permit.External.Prefixes[i].Prefix < peering.Spec.Permit.External.Prefixes[j].Prefix
 	})
@@ -156,6 +190,20 @@ func (peering *ExternalPeering) Validate(ctx context.Context, kube kclient.Reade
 	}
 	if peering.Spec.Permit.External.Name == "" {
 		return nil, errors.Errorf("external.name is required")
+	}
+	seen := map[string]bool{}
+	for _, prefix := range peering.Spec.Permit.VPC.HostBGPExtraPrefixes {
+		parsed, err := netip.ParsePrefix(prefix)
+		if err != nil || !parsed.Addr().Is4() || parsed != parsed.Masked() {
+			return nil, errors.Errorf("vpc.hostBGPExtraPrefixes must contain canonical IPv4 prefixes, got %q", prefix)
+		}
+		if seen[prefix] {
+			return nil, errors.Errorf("duplicate vpc.hostBGPExtraPrefixes entry %s", prefix)
+		}
+		seen[prefix] = true
+	}
+	if len(seen) > 0 && fabricCfg != nil && fabricCfg.LoopbackWorkaround {
+		return nil, errors.Errorf("hostBGP extra prefix export requires native inter-VRF route leaking, not the loopback workaround")
 	}
 
 	for _, permit := range peering.Spec.Permit.External.Prefixes {
@@ -208,6 +256,9 @@ func (peering *ExternalPeering) Validate(ctx context.Context, kube kclient.Reade
 			if _, exists := vpc.Spec.Subnets[subnet]; !exists {
 				return nil, errors.Errorf("vpc %s does not have subnet %s", peering.Spec.Permit.VPC.Name, subnet)
 			}
+		}
+		if _, err := peering.Spec.Permit.VPC.ResolveHostBGPExtraPrefixes(vpc.Spec); err != nil {
+			return nil, err
 		}
 	}
 

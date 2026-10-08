@@ -655,6 +655,9 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req kctrl.Request) (kct
 		}
 	}
 	for _, peering := range externalPeerings {
+		for _, prefix := range peering.Permit.VPC.HostBGPExtraPrefixes {
+			subnetsReq[prefix] = true
+		}
 		for _, prefix := range peering.Permit.External.Prefixes {
 			subnetsReq[prefix.Prefix] = true
 		}

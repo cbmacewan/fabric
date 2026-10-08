@@ -94,6 +94,16 @@ spec:
                     description: VPC is the VPC-side of the configuration to peer
                       with
                     properties:
+                      hostBGPExtraPrefixes:
+                        description: |-
+                          HostBGPExtraPrefixes selects additional hostBGP prefixes configured on this VPC to advertise to the External.
+                          Selection is independent of Subnets and preserves the configured hostBGP prefix-length bounds.
+                          Omitted prefixes are not exported. Requires native inter-VRF route leaking (no loopback workaround).
+                        items:
+                          type: string
+                        maxItems: 100
+                        type: array
+                        x-kubernetes-list-type: set
                       name:
                         description: Name is the name of the VPC to peer with
                         type: string

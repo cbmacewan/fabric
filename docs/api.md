@@ -2155,6 +2155,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `name` _string_ | Name is the name of the VPC to peer with |  |  |
 | `subnets` _string array_ | Subnets is the list of subnets to advertise from VPC to the External |  |  |
+| `hostBGPExtraPrefixes` _string array_ | HostBGPExtraPrefixes selects additional hostBGP prefixes configured on this VPC to advertise to the External.<br />Selection is independent of Subnets and preserves the configured hostBGP prefix-length bounds.<br />Omitted prefixes are not exported. Requires native inter-VRF route leaking (no loopback workaround). |  | MaxItems: 100 <br /> |
 
 
 #### ExternalPeeringStatus
